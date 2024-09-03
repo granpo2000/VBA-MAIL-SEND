@@ -1,0 +1,190 @@
+Sub EnviarEmailsComTabelaEGrafico()
+    Dim olApp As Object
+    Dim olMail As Object
+    Dim ws As Worksheet
+    Dim graficoWs As Worksheet
+    Dim cel As Range
+    Dim tabelaDados As Range
+    Dim email As String
+    Dim negociador As String
+    Dim corpoEmail As String
+    Dim tabelaHTML As String
+    Dim chartImagePath As String
+    Dim dict As Object
+    Dim emailEnviado As Boolean
+    Dim arquivoAnexo As String
+    Dim grafico As ChartObject
+    Dim copiarRng As Range
+    
+    On Error Resume Next
+    Set olApp = GetObject(, "Outlook.Application")
+    If olApp Is Nothing Then
+        Set olApp = CreateObject("Outlook.Application")
+    End If
+    On Error GoTo 0
+    
+    Set ws = ThisWorkbook.Sheets("MACRO ENVIO")
+    Set graficoWs = ThisWorkbook.Sheets("PERCENTUAL CAPEX")
+    
+    ' Nome do gráfico a ser inserido no corpo do e-mail
+    On Error Resume Next
+    Set grafico = graficoWs.ChartObjects("Gráfico 1") ' Ajuste o nome conforme necessário
+    On Error GoTo 0
+    
+    If grafico Is Nothing Then
+        MsgBox "Gráfico não encontrado na planilha 'PERCENTUAL CAPEX'.", vbExclamation
+        Exit Sub
+    End If
+    
+    NumeroSemana = Application.WorksheetFunction.WeekNum(Date, 2)
+    dataAtual = "Semana " & NumeroSemana
+    
+    ' Caminho do arquivo que será anexado
+    arquivoAnexo = "\\CWBFS01BRF\corporativo\DPLOI\Suprimentos\0. Gestão e Performance\2024\20. Fornecedores de Excelência\Regras - CAPEX & MRO.xlsx"
+    
+    ' Inicializa o dicionário
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    ' Iterar por cada célula na coluna A
+    For Each cel In ws.Range("A2:A" & ws.Cells(ws.Rows.Count, "A").End(xlUp).Row)
+        
+        ' Verifica se o valor na coluna A já foi processado
+        If Not dict.exists(cel.Value) Then
+            dict.Add cel.Value, True
+            
+            ' Aplicar o filtro na planilha "MACRO ENVIO"
+            ws.AutoFilterMode = False
+            ws.Range("A1:O1").AutoFilter Field:=1, Criteria1:=cel.Value
+            
+            If WorksheetFunction.Subtotal(103, ws.Range("A:A")) > 1 Then
+                ' Capturar os dados filtrados
+                On Error Resume Next
+                Set tabelaDados = ws.Range("A1:L" & ws.Cells(ws.Rows.Count, "A").End(xlUp).Row).SpecialCells(xlCellTypeVisible)
+                On Error GoTo 0
+
+                ' Verificar se há dados visíveis
+                If Not tabelaDados Is Nothing Then
+                    ' Copiar os dados filtrados para a planilha "PERCENTUAL CAPEX"
+                    On Error Resume Next
+                    Set copiarRng = ws.Range("F2:I" & ws.Cells(ws.Rows.Count, "F").End(xlUp).Row).SpecialCells(xlCellTypeVisible)
+                    On Error GoTo 0
+                    
+                    If Not copiarRng Is Nothing Then
+                        copiarRng.Copy
+                        With graficoWs
+                            .Range("A5").PasteSpecial Paste:=xlPasteValues, Operation:=xlNone, SkipBlanks:=False, Transpose:=False
+                        End With
+                        
+                        ' Atualizar o gráfico com os novos dados
+                        graficoWs.Calculate
+                        
+                        ' Salvar o gráfico atualizado como uma imagem temporária
+                        chartImagePath = Environ("TEMP") & "\grafico_temp.png"
+                        grafico.Chart.Export Filename:=chartImagePath, FilterName:="PNG"
+                        
+                        ' Criar e enviar o e-mail
+                        Set olMail = olApp.CreateItem(0)
+                        With olMail
+                            email = ws.Cells(cel.Row, "N").Value
+                            negociador = ws.Cells(cel.Row, "O").Value
+                            .To = email
+                            .CC = negociador
+                            .Subject = "Programa Fornecedores de Excelência BRF | 2024."
+                            
+                            corpoEmail = "<p>Olá!</p>" & _
+                                         "<p>Estamos felizes em divulgar a 1º parcial do nosso Programa Fornecedores de Excelência de 2024.</p>" & _
+                                         "<p>Mensalmente enviaremos a parcial para que possam acompanhar sua evolução no programa!</p>" & _
+                                         "<p>Nas colunas temos a sua modalidade de participação e sua posição na modalidade. A Pontuação é composta pelo resultado da meta indicada, que geram pontos e sobre estes pontos é aplicado o peso conforme indicado no book do programa.</p>" & _
+                                         "<p>Havendo dúvidas sobre sua pontuação, consultar o Book do programa enviado por e-mail, Portal de Compras ou nos acione no e-mail <a href='mailto:francisco.farias@brf.com'>francisco.farias@brf.com</a> ou <a href='mailto:eliani.campos@brf.com'>eliani.campos@brf.com</a>.</p>" & _
+                                         "</ul>"
+
+                            ' Gerar tabela HTML com título
+                            tabelaHTML = GeraTabelaHTML(tabelaDados, "Resultados do programa:")
+                            corpoEmail = corpoEmail & tabelaHTML & "<br><p></p>"
+                            
+                            ' Inserir o gráfico no corpo do e-mail
+                            corpoEmail = corpoEmail & "<br><img src='cid:grafico1'><br>"
+                            
+                            .HTMLBody = corpoEmail & "<p>Em anexo está a tabela de pesos aplicados para cada relação de pontos.</p>" & .HTMLBody
+                            
+                            ' Adicionar o gráfico como anexo
+                            .Attachments.Add chartImagePath
+                            .Attachments.Item(.Attachments.Count).PropertyAccessor.SetProperty "http://schemas.microsoft.com/mapi/proptag/0x3712001F", "grafico1"
+                            
+                            ' Adicionar o arquivo Excel como anexo
+                            .Attachments.Add arquivoAnexo
+                            
+                            .Importance = 2
+                            .Send
+                            emailEnviado = True
+                        End With
+                    Else
+                        MsgBox "Nenhum dado encontrado para copiar.", vbExclamation
+                    End If
+                Else
+                    MsgBox "Nenhum dado encontrado para o filtro aplicado: " & cel.Value, vbExclamation
+                End If
+            End If
+        End If
+    Next cel
+    ws.AutoFilterMode = False
+    
+    If emailEnviado Then
+        MsgBox "E-mails enviados com sucesso (Eu acho eheheh).", vbInformation
+    Else
+        MsgBox "Nenhum e-mail foi enviado.", vbExclamation
+    End If
+    
+    ' Remover a imagem temporária
+    On Error Resume Next
+    Kill chartImagePath
+    On Error GoTo 0
+End Sub
+
+Function GeraTabelaHTML(rng As Range, ByVal titulo As String) As String
+    Dim tbl As String
+    Dim cel As Range
+    Dim rw As Range
+    Dim headerColor As String
+    Dim headerTextColor As String
+    
+    'Aqui está o título da tabela, ele é definido pela cor e formatação do texto igual demonstrado abaixo
+    
+    tbl = "<p><strong>" & titulo & "</strong></p>"
+    tbl = tbl & "<table border='2' style='border-collapse: separate; border-spacing: 0; font-family: Calibri; font-size: 10pt;'>"
+    
+    ' Adicionar cabeçalho
+    For Each cel In rng.Rows(1).Cells
+        ' Definir a cor de fundo e o estilo do texto para o cabeçalho
+        Select Case cel.Column
+            Case 1 To 5
+                headerColor = "background-color: #003366;"  ' Azul escuro
+                headerTextColor = "color: #FFFFFF;"           ' Branco
+            Case 6 To 9
+                headerColor = "background-color: #FFC000;"  ' Laranja
+                headerTextColor = "color: #000000;"           ' Preto
+            Case 10 To 12
+                headerColor = "background-color: #008000;"  ' Verde
+                headerTextColor = "color: #000000;"           ' Preto
+            Case Else
+                headerColor = "background-color: #FFFFFF;"  ' Branco padrão para outras colunas
+                headerTextColor = "color: #000000;"           ' Preto
+        End Select
+        tbl = tbl & "<th style='" & headerColor & " " & headerTextColor & " font-weight: bold; border: 2px solid #000000; padding: 4px;'>" & cel.Text & "</th>"
+    Next cel
+    
+    ' Adicionar dados da tabela
+    For Each rw In rng.Rows
+        ' Ignorar a linha do cabeçalho (rw.Cells(1) é o cabeçalho)
+        If rw.Row > 1 Then
+            tbl = tbl & "<tr>"
+            For Each cel In rw.Cells
+                tbl = tbl & "<td style='border: 2px solid #000000; padding: 4px; text-align: center;'>" & cel.Text & "</td>"
+            Next cel
+            tbl = tbl & "</tr>"
+        End If
+    Next rw
+    
+    tbl = tbl & "</table>"
+    GeraTabelaHTML = tbl
+End Function
